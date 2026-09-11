@@ -248,29 +248,52 @@ public type Scopes record {|
 |};
 
 # A streamed chunk of a chat completion response, normalized across providers.
-# Each provider's native stream is mapped onto this type, which carries a single
-# incremental update: a text fragment, a reasoning fragment, tool call fragments,
-# or a finish reason.
-public type ChatCompletionChunk record {|
+# Each provider's native stream is mapped onto this type. A chunk carries exactly
+# one kind of incremental update, so a single provider event may map onto several
+# chunks; narrow with `is` to tell them apart.
+public type ChatCompletionChunk ChatCompletionTextChunk|ChatCompletionReasoningChunk
+    |ChatCompletionToolCallChunk|ChatCompletionStopChunk;
+
+# Fields carried by every streamed chunk.
+type CommonChunkFields record {|
     # Unique identifier for the completion; stable across all chunks of one response
     string id?;
-    # Role of the author of the message; only sent on the first chunk
-    ASSISTANT role?;
-    # The answer text fragment for this chunk; `()` for non-content chunks
-    string? content = ();
-    # Reasoning/chain-of-thought fragment (e.g. DeepSeek `reasoning_content`,
-    # Anthropic `thinking`, Ollama `thinking`); `()` when absent or unsupported
-    string? reasoning = ();
-    # Incremental tool calls produced by the model; correlate fragments by `index`
-    ToolCallChunk[]? toolCalls = ();
-    # Reason the model stopped generating tokens; `()` until the final chunk
-    FinishReason? finishReason = ();
 |};
 
-# An incremental tool call delivered within a streamed chunk. Mirrors `FunctionCall`,
-# with `index` added to accumulate fragments. With parallel tool calling, several tool
-# calls stream concurrently, distinguished by `index`.
-public type ToolCallChunk record {|
+# An incremental fragment of the model's answer text.
+public type ChatCompletionTextChunk record {|
+    *CommonChunkFields;
+    # The answer text fragment for this chunk
+    string content;
+|};
+
+# An incremental fragment of the model's reasoning (e.g. DeepSeek `reasoning_content`,
+# Anthropic `thinking`, Ollama `thinking`). Never emitted by providers that do not
+# expose reasoning.
+public type ChatCompletionReasoningChunk record {|
+    *CommonChunkFields;
+    # The reasoning fragment for this chunk
+    string reasoning;
+|};
+
+# Incremental tool calls produced by the model. With parallel tool calling, several
+# tool calls stream concurrently, distinguished by the fragment `index`.
+public type ChatCompletionToolCallChunk record {|
+    *CommonChunkFields;
+    # Tool call fragments carried by this chunk; correlate them by `index`
+    ToolCallFragment[] toolCalls;
+|};
+
+# The terminal chunk of a response: the model stopped generating.
+public type ChatCompletionStopChunk record {|
+    *CommonChunkFields;
+    # Reason the model stopped generating tokens
+    FinishReason finishReason;
+|};
+
+# An incremental tool call delivered within a `ChatCompletionToolCallChunk`. Mirrors
+# `FunctionCall`, with `index` added to accumulate fragments across chunks.
+public type ToolCallFragment record {|
     # Index used to accumulate fragments of the same tool call across chunks
     int index;
     # Identifier of the tool call; only sent on the first fragment of the call

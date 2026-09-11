@@ -23,6 +23,7 @@ const MOCK_CHAT_URL = "http://localhost:9096";
 const MOCK_CHAT_TEXT_RESPONSE = "Hello! How can I help you today?";
 
 const string TRIGGER_STREAM_ERROR = "trigger-stream-error";
+const string TRIGGER_COMBINED_STREAM_CHUNK = "trigger-combined-chunk";
 
 // Streams the SSE events collected in `events` one at a time.
 class MockSseEventIterator {
@@ -61,6 +62,16 @@ function mockTextStreamEvents() returns http:SseEvent[] => [
     {data: "[DONE]"}
 ];
 
+// A single wire chunk carrying a content fragment and a finish reason together, as some
+// OpenAI-compatible gateways emit. One raw chunk, two normalized chunks.
+function mockCombinedStreamEvents() returns http:SseEvent[] => [
+    {
+        data: string `{"id":"resp-combined","choices":[{"index":0,` +
+            string `"delta":{"role":"assistant","content":"All done."},"finish_reason":"stop"}]}`
+    },
+    {data: "[DONE]"}
+];
+
 // Splits a `searchFunction({"query":"test"})` call's name and arguments across a few deltas.
 function mockFunctionCallStreamEvents() returns http:SseEvent[] => [
     {data: string `{"choices":[{"index":0,"delta":{"role":"assistant"}}]}`},
@@ -92,6 +103,9 @@ service on new http:Listener(MOCK_CHAT_PORT) {
             json|error messages = payload.messages;
             if messages is json[] && messages.length() > 0 && messages.toString().includes(TRIGGER_STREAM_ERROR) {
                 return <http:InternalServerError>{body: {message: "simulated streaming failure"}};
+            }
+            if messages is json[] && messages.toString().includes(TRIGGER_COMBINED_STREAM_CHUNK) {
+                return new stream<http:SseEvent, error?>(new MockSseEventIterator(mockCombinedStreamEvents()));
             }
             http:SseEvent[] events = isFunctionCall ? mockFunctionCallStreamEvents() : mockTextStreamEvents();
             return new stream<http:SseEvent, error?>(new MockSseEventIterator(events));
@@ -213,7 +227,8 @@ function testWso2ModelProviderChatStreamWithUserMessage() returns error? {
     stream<ChatCompletionChunk, Error?> chunkStream = check provider->chatStream({role: USER, content: "Hello"}, []);
 
     string content = "";
-    ROLE? firstRole = ();
+    int textChunkCount = 0;
+    int stopChunkCount = 0;
     FinishReason? lastFinishReason = ();
     while true {
         record {|ChatCompletionChunk value;|}|Error? next = chunkStream.next();
@@ -224,22 +239,61 @@ function testWso2ModelProviderChatStreamWithUserMessage() returns error? {
             test:assertFail("Unexpected error while streaming: " + next.message());
         }
         ChatCompletionChunk chunk = next.value;
-        if firstRole is () && chunk.role is ROLE {
-            firstRole = chunk.role;
-        }
-        string? chunkContent = chunk.content;
-        if chunkContent is string {
-            content += chunkContent;
-        }
-        FinishReason? finishReason = chunk.finishReason;
-        if finishReason is FinishReason {
-            lastFinishReason = finishReason;
+        if chunk is ChatCompletionTextChunk {
+            content += chunk.content;
+            textChunkCount += 1;
+        } else if chunk is ChatCompletionStopChunk {
+            lastFinishReason = chunk.finishReason;
+            stopChunkCount += 1;
+        } else {
+            test:assertFail("Unexpected chunk kind in a plain text stream");
         }
     }
 
-    test:assertEquals(firstRole, ASSISTANT);
     test:assertEquals(content, MOCK_CHAT_TEXT_RESPONSE);
+    // The opening role-only delta and the trailing usage carry no update, so neither
+    // reaches the caller: one chunk per content delta, plus the terminal chunk.
+    test:assertEquals(textChunkCount, 2);
+    test:assertEquals(stopChunkCount, 1);
     test:assertEquals(lastFinishReason, STOP);
+}
+
+@test:Config {
+    groups: ["wso2-model-provider"]
+}
+function testWso2ModelProviderChatStreamFansOutCombinedChunk() returns error? {
+    Wso2ModelProvider provider = check new (MOCK_CHAT_URL, "test-token");
+    stream<ChatCompletionChunk, Error?> chunkStream =
+        check provider->chatStream({role: USER, content: TRIGGER_COMBINED_STREAM_CHUNK}, []);
+
+    ChatCompletionChunk[] chunks = [];
+    while true {
+        record {|ChatCompletionChunk value;|}|Error? next = chunkStream.next();
+        if next is () {
+            break;
+        }
+        if next is Error {
+            test:assertFail("Unexpected error while streaming: " + next.message());
+        }
+        chunks.push(next.value);
+    }
+
+    // One wire chunk carried both a content fragment and a finish reason; each kind of
+    // update is delivered as its own chunk, text first.
+    test:assertEquals(chunks.length(), 2);
+    ChatCompletionChunk first = chunks[0];
+    if first !is ChatCompletionTextChunk {
+        test:assertFail("Expected the text fragment to be delivered first");
+    }
+    test:assertEquals(first.content, "All done.");
+    ChatCompletionChunk second = chunks[1];
+    if second !is ChatCompletionStopChunk {
+        test:assertFail("Expected the finish reason to be delivered as a terminal chunk");
+    }
+    test:assertEquals(second.finishReason, STOP);
+    // The completion id is stable across every chunk fanned out from one raw chunk.
+    test:assertEquals(first?.id, "resp-combined");
+    test:assertEquals(second?.id, "resp-combined");
 }
 
 @test:Config {
@@ -262,6 +316,7 @@ function testWso2ModelProviderChatStreamWithTools() returns error? {
 
     string accumulatedName = "";
     string accumulatedArguments = "";
+    int stopChunkCount = 0;
     FinishReason? lastFinishReason = ();
     while true {
         record {|ChatCompletionChunk value;|}|Error? next = chunkStream.next();
@@ -271,8 +326,11 @@ function testWso2ModelProviderChatStreamWithTools() returns error? {
         if next is Error {
             test:assertFail("Unexpected error while streaming: " + next.message());
         }
-        ToolCallChunk[]? toolCalls = next.value.toolCalls;
-        if toolCalls is ToolCallChunk[] && toolCalls.length() > 0 {
+        ChatCompletionChunk chunk = next.value;
+        if chunk is ChatCompletionToolCallChunk {
+            ToolCallFragment[] toolCalls = chunk.toolCalls;
+            test:assertEquals(toolCalls.length(), 1);
+            test:assertEquals(toolCalls[0].index, 0, "Fragments of one call share an index");
             string? name = toolCalls[0]?.name;
             if name is string {
                 accumulatedName += name;
@@ -281,16 +339,18 @@ function testWso2ModelProviderChatStreamWithTools() returns error? {
             if args is string {
                 accumulatedArguments += args;
             }
-        }
-        FinishReason? finishReason = next.value.finishReason;
-        if finishReason is FinishReason {
-            lastFinishReason = finishReason;
+        } else if chunk is ChatCompletionStopChunk {
+            lastFinishReason = chunk.finishReason;
+            stopChunkCount += 1;
+        } else {
+            test:assertFail("Unexpected chunk kind in a tool call stream");
         }
     }
 
     test:assertEquals(accumulatedName, "searchFunction");
     map<json> parsedArguments = check accumulatedArguments.fromJsonStringWithType();
     test:assertEquals(parsedArguments["query"], "test");
+    test:assertEquals(stopChunkCount, 1);
     test:assertEquals(lastFinishReason, TOOL_CALLS);
 }
 

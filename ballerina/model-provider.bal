@@ -136,9 +136,9 @@ function generateLlmResponseStream(ModelProvider model, Prompt prompt, typedesc<
     return new stream<string, Error?>(new GenerateStreamTextIterator(chunks));
 }
 
-# Projects a raw `ChatCompletionChunk` stream onto its text content, yielding each
-# non-empty `content` fragment and skipping chunks that carry none - tool-call,
-# reasoning and finish-reason-only chunks. Backs `generateLlmResponseStream`.
+# Projects a raw `ChatCompletionChunk` stream onto its text content, yielding the
+# fragment carried by each `ChatCompletionTextChunk` and skipping every other chunk
+# kind - tool call, reasoning and stop. Backs `generateLlmResponseStream`.
 class GenerateStreamTextIterator {
     private stream<ChatCompletionChunk, Error?> chunks;
 
@@ -155,11 +155,13 @@ class GenerateStreamTextIterator {
             if next is Error {
                 return next;
             }
-            string? content = next.value.content;
-            if content is string && content.length() > 0 {
-                return {value: content};
+            ChatCompletionChunk chunk = next.value;
+            // The empty-fragment guard is for third-party providers: `ModelProvider` is an
+            // open extension point, and an empty fragment would surface as a no-op value.
+            if chunk is ChatCompletionTextChunk && chunk.content.length() > 0 {
+                return {value: chunk.content};
             }
-            // Non-content chunks (tool calls, reasoning, finish reason) carry no answer text; skip them.
+            // Every other chunk kind carries no answer text; skip it.
         }
     }
 
@@ -526,51 +528,59 @@ type Wso2StreamFunctionCall record {
     string arguments?;
 };
 
-# Maps a raw WSO2 stream chunk onto the public `ChatCompletionChunk` shape.
+# Maps a raw WSO2 stream chunk onto the public `ChatCompletionChunk` shapes.
 #
-# The chunk has no notion of multiple choices, so only the first is surfaced. A chunk
-# carrying no choice at all - the trailing usage-only chunk, for one - maps to `()`:
-# token usage is reported to the observability span rather than on the chunk, leaving
-# nothing to hand the caller.
+# Each normalized chunk carries exactly one kind of update, while one raw chunk can
+# carry several at once - a text fragment alongside a finish reason, say - so the
+# mapping fans out into zero or more chunks, in the order text, tool calls, stop.
+#
+# The raw chunk has no notion of multiple choices, so only the first is surfaced.
+# A raw chunk that carries nothing the caller can use - the role-only opening chunk
+# and the trailing usage-only chunk both qualify - maps to an empty array: token
+# usage is reported to the observability span rather than on a chunk.
 #
 # + rawChunk - The raw, provider-specific chunk parsed from an SSE `data` payload
-# + return - The normalized chunk, or `()` for chunks that carry no choices
-isolated function mapWso2StreamChunk(Wso2StreamChunk rawChunk) returns ChatCompletionChunk? {
+# + return - The normalized chunks, empty when the raw chunk carries no update
+isolated function mapWso2StreamChunk(Wso2StreamChunk rawChunk) returns ChatCompletionChunk[] {
     Wso2StreamChoice[]? choices = rawChunk.choices;
     if choices is () || choices.length() == 0 {
-        return ();
+        return [];
     }
     Wso2StreamChoice choice = choices[0];
     Wso2StreamDelta delta = choice.delta ?: {};
+    ChatCompletionChunk[] chunks = [];
 
-    ToolCallChunk[]? toolCalls = ();
+    string? content = delta?.content;
+    if content is string && content.length() > 0 {
+        chunks.push(<ChatCompletionTextChunk>{content});
+    }
+
     Wso2StreamFunctionCall? functionCall = delta.functionCall;
     if functionCall is Wso2StreamFunctionCall {
-        ToolCallChunk toolCall = {index: 0};
+        ToolCallFragment fragment = {index: 0};
         string? name = functionCall?.name;
         if name is string {
-            toolCall.name = name;
+            fragment.name = name;
         }
         string? arguments = functionCall?.arguments;
         if arguments is string {
-            toolCall.arguments = arguments;
+            fragment.arguments = arguments;
         }
-        toolCalls = [toolCall];
+        chunks.push(<ChatCompletionToolCallChunk>{toolCalls: [fragment]});
     }
 
-    ChatCompletionChunk chunk = {
-        content: delta?.content,
-        toolCalls,
-        finishReason: mapWso2FinishReason(choice?.finishReason)
-    };
+    FinishReason? finishReason = mapWso2FinishReason(choice?.finishReason);
+    if finishReason is FinishReason {
+        chunks.push(<ChatCompletionStopChunk>{finishReason});
+    }
+
     string? id = rawChunk?.id;
     if id is string {
-        chunk.id = id;
+        foreach ChatCompletionChunk chunk in chunks {
+            chunk.id = id;
+        }
     }
-    if delta.role == "assistant" {
-        chunk.role = ASSISTANT;
-    }
-    return chunk;
+    return chunks;
 }
 
 # Normalizes a raw WSO2 `finish_reason` value onto the shared `FinishReason` enum.
@@ -609,6 +619,10 @@ class Wso2ChatStreamIterator {
     private Wso2SseEventStream events;
     private observe:ChatSpan span;
     private boolean done = false;
+    # Chunks mapped from the most recent SSE event but not yet handed to the caller.
+    # One raw chunk can fan out into several normalized chunks - each carries a single
+    # kind of update - and `next` yields one per call.
+    private ChatCompletionChunk[] pending = [];
 
     function init(Wso2SseEventStream events, observe:ChatSpan span) {
         self.events = events;
@@ -618,6 +632,9 @@ class Wso2ChatStreamIterator {
     public isolated function next() returns record {|ChatCompletionChunk value;|}|Error? {
         if self.isDone() {
             return ();
+        }
+        if self.pending.length() > 0 {
+            return {value: self.pending.shift()};
         }
         while true {
             record {|http:SseEvent value;|}|error? nextEvent = self.events.next();
@@ -652,25 +669,27 @@ class Wso2ChatStreamIterator {
                 return err;
             }
 
-            // Usage rides the raw chunk rather than the normalized one, so it is reported
-            // to the span before the chunk is projected; a usage-only chunk maps to `()`
-            // and is skipped.
+            // Usage rides the raw chunk rather than the normalized ones, so it is reported
+            // to the span before the chunk is projected; a usage-only chunk maps to no
+            // chunks at all and is skipped.
             intelligence:CompletionUsage? usage = rawChunk?.usage;
             if usage is intelligence:CompletionUsage {
                 self.span.addInputTokenCount(usage.promptTokens);
                 self.span.addOutputTokenCount(usage.completionTokens);
             }
 
-            ChatCompletionChunk? chunk = mapWso2StreamChunk(rawChunk);
-            if chunk is () {
+            ChatCompletionChunk[] chunks = mapWso2StreamChunk(rawChunk);
+            if chunks.length() == 0 {
                 continue;
             }
-            FinishReason? finishReason = chunk.finishReason;
-            if finishReason is FinishReason {
-                self.span.addFinishReason(finishReason);
-                self.span.addOutputType(observe:TEXT);
+            foreach ChatCompletionChunk chunk in chunks {
+                if chunk is ChatCompletionStopChunk {
+                    self.span.addFinishReason(chunk.finishReason);
+                    self.span.addOutputType(observe:TEXT);
+                }
             }
-            return {value: chunk};
+            self.pending = chunks;
+            return {value: self.pending.shift()};
         }
     }
 
