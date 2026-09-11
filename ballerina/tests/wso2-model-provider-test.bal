@@ -223,15 +223,15 @@ function testWso2ModelProviderChatStreamWithUserMessage() returns error? {
         if next is Error {
             test:assertFail("Unexpected error while streaming: " + next.message());
         }
-        ChatCompletionChunkDelta delta = next.value.choices[0].delta;
-        if firstRole is () && delta.role is ROLE {
-            firstRole = delta.role;
+        ChatCompletionChunk chunk = next.value;
+        if firstRole is () && chunk.role is ROLE {
+            firstRole = chunk.role;
         }
-        string? deltaContent = delta.content;
-        if deltaContent is string {
-            content += deltaContent;
+        string? chunkContent = chunk.content;
+        if chunkContent is string {
+            content += chunkContent;
         }
-        FinishReason? finishReason = next.value.choices[0].finishReason;
+        FinishReason? finishReason = chunk.finishReason;
         if finishReason is FinishReason {
             lastFinishReason = finishReason;
         }
@@ -271,21 +271,18 @@ function testWso2ModelProviderChatStreamWithTools() returns error? {
         if next is Error {
             test:assertFail("Unexpected error while streaming: " + next.message());
         }
-        ToolCallChunk[]? toolCalls = next.value.choices[0].delta.toolCalls;
+        ToolCallChunk[]? toolCalls = next.value.toolCalls;
         if toolCalls is ToolCallChunk[] && toolCalls.length() > 0 {
-            FunctionCallChunk? functionCallChunk = toolCalls[0].'function;
-            if functionCallChunk is FunctionCallChunk {
-                string? name = functionCallChunk.name;
-                if name is string {
-                    accumulatedName += name;
-                }
-                string? args = functionCallChunk.arguments;
-                if args is string {
-                    accumulatedArguments += args;
-                }
+            string? name = toolCalls[0]?.name;
+            if name is string {
+                accumulatedName += name;
+            }
+            string? args = toolCalls[0]?.arguments;
+            if args is string {
+                accumulatedArguments += args;
             }
         }
-        FinishReason? finishReason = next.value.choices[0].finishReason;
+        FinishReason? finishReason = next.value.finishReason;
         if finishReason is FinishReason {
             lastFinishReason = finishReason;
         }
