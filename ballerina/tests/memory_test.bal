@@ -14,7 +14,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-import ballerina/jballerina.java;
 import ballerina/test;
 
 const string K1 = "key1";
@@ -268,10 +267,9 @@ function testShortTermMemoryWithSummarizationOnOverflow1() returns error? {
             return error Error("chatStream not implemented");
         }
 
-        remote function generateStream(Prompt prompt, @display {label: "Expected type"} typedesc<anydata> td = <>)
-                returns stream<td, Error?>|Error = @java:Method {
-            'class: "io.ballerina.stdlib.ai.wso2.StreamGenerator"
-        } external;
+        remote function generateStream(Prompt prompt) returns stream<string, Error?>|Error {
+            return error Error("generateStream not implemented");
+        }
 
         isolated remote function generate(Prompt prompt, typedesc<anydata> td) returns td|Error = external;
     };
@@ -383,10 +381,9 @@ function testShortTermMemoryWithSummarizationOnOverflow1WithBatchUpdate() return
             return error Error("chatStream not implemented");
         }
 
-        remote function generateStream(Prompt prompt, @display {label: "Expected type"} typedesc<anydata> td = <>)
-                returns stream<td, Error?>|Error = @java:Method {
-            'class: "io.ballerina.stdlib.ai.wso2.StreamGenerator"
-        } external;
+        remote function generateStream(Prompt prompt) returns stream<string, Error?>|Error {
+            return error Error("generateStream not implemented");
+        }
 
         isolated remote function generate(Prompt prompt, typedesc<anydata> td) returns td|Error = external;
     };
@@ -704,10 +701,9 @@ function testOverridingSummarizationPrompt() returns error? {
             return error Error("chatStream not implemented");
         }
 
-        remote function generateStream(Prompt prompt, @display {label: "Expected type"} typedesc<anydata> td = <>)
-                returns stream<td, Error?>|Error = @java:Method {
-            'class: "io.ballerina.stdlib.ai.wso2.StreamGenerator"
-        } external;
+        remote function generateStream(Prompt prompt) returns stream<string, Error?>|Error {
+            return error Error("generateStream not implemented");
+        }
 
         isolated remote function generate(Prompt prompt, typedesc<anydata> td) returns td|Error = external;
     };
@@ -794,10 +790,9 @@ function testSummarizationFailure() returns error? {
             return error Error("chatStream not implemented");
         }
 
-        remote function generateStream(Prompt prompt, @display {label: "Expected type"} typedesc<anydata> td = <>)
-                returns stream<td, Error?>|Error = @java:Method {
-            'class: "io.ballerina.stdlib.ai.wso2.StreamGenerator"
-        } external;
+        remote function generateStream(Prompt prompt) returns stream<string, Error?>|Error {
+            return error Error("generateStream not implemented");
+        }
 
         isolated remote function generate(Prompt prompt, typedesc<anydata> td) returns td|Error = external;
     };
@@ -872,10 +867,9 @@ isolated client class MockSummarizerModel {
         return error Error("chatStream not implemented");
     }
 
-    remote function generateStream(Prompt prompt, @display {label: "Expected type"} typedesc<anydata> td = <>)
-            returns stream<td, Error?>|Error = @java:Method {
-        'class: "io.ballerina.stdlib.ai.wso2.StreamGenerator"
-    } external;
+    remote function generateStream(Prompt prompt) returns stream<string, Error?>|Error {
+        return error Error("generateStream not implemented");
+    }
 
     isolated remote function generate(Prompt prompt, typedesc<anydata> td) returns td|Error = external;
 }

@@ -68,10 +68,9 @@ public isolated client class HitlMockLLM {
         return error Error("chatStream not implemented in HitlMockLLM");
     }
 
-    remote function generateStream(Prompt prompt, @display {label: "Expected type"} typedesc<anydata> td = <>)
-        returns stream<td, Error?>|Error = @java:Method {
-        'class: "io.ballerina.stdlib.ai.wso2.StreamGenerator"
-    } external;
+    remote function generateStream(Prompt prompt) returns stream<string, Error?>|Error {
+        return error Error("generateStream not implemented in HitlMockLLM");
+    }
 }
 
 function newHitlTestAgent() returns Agent|error =>
@@ -163,10 +162,9 @@ public isolated client class HitlStructuredMockLLM {
         return error Error("chatStream not implemented in HitlStructuredMockLLM");
     }
 
-    remote function generateStream(Prompt prompt, @display {label: "Expected type"} typedesc<anydata> td = <>)
-        returns stream<td, Error?>|Error = @java:Method {
-        'class: "io.ballerina.stdlib.ai.wso2.StreamGenerator"
-    } external;
+    remote function generateStream(Prompt prompt) returns stream<string, Error?>|Error {
+        return error Error("generateStream not implemented in HitlStructuredMockLLM");
+    }
 }
 
 @test:Config
@@ -314,10 +312,9 @@ public isolated client class MaxIterMockLLM {
         return error Error("chatStream not implemented in MaxIterMockLLM");
     }
 
-    remote function generateStream(Prompt prompt, @display {label: "Expected type"} typedesc<anydata> td = <>)
-        returns stream<td, Error?>|Error = @java:Method {
-        'class: "io.ballerina.stdlib.ai.wso2.StreamGenerator"
-    } external;
+    remote function generateStream(Prompt prompt) returns stream<string, Error?>|Error {
+        return error Error("generateStream not implemented in MaxIterMockLLM");
+    }
 }
 
 @test:Config
@@ -416,10 +413,9 @@ public isolated client class HitlMixedBatchMockLLM {
         return error Error("chatStream not implemented in HitlMixedBatchMockLLM");
     }
 
-    remote function generateStream(Prompt prompt, @display {label: "Expected type"} typedesc<anydata> td = <>)
-        returns stream<td, Error?>|Error = @java:Method {
-        'class: "io.ballerina.stdlib.ai.wso2.StreamGenerator"
-    } external;
+    remote function generateStream(Prompt prompt) returns stream<string, Error?>|Error {
+        return error Error("generateStream not implemented in HitlMixedBatchMockLLM");
+    }
 }
 
 @test:Config
@@ -485,10 +481,9 @@ public isolated client class HitlTwoGatesMockLLM {
         return error Error("chatStream not implemented in HitlTwoGatesMockLLM");
     }
 
-    remote function generateStream(Prompt prompt, @display {label: "Expected type"} typedesc<anydata> td = <>)
-        returns stream<td, Error?>|Error = @java:Method {
-        'class: "io.ballerina.stdlib.ai.wso2.StreamGenerator"
-    } external;
+    remote function generateStream(Prompt prompt) returns stream<string, Error?>|Error {
+        return error Error("generateStream not implemented in HitlTwoGatesMockLLM");
+    }
 }
 
 @test:Config
@@ -674,10 +669,9 @@ public isolated client class HitlAuthFailureMockLLM {
         return error Error("chatStream not implemented in HitlAuthFailureMockLLM");
     }
 
-    remote function generateStream(Prompt prompt, @display {label: "Expected type"} typedesc<anydata> td = <>)
-        returns stream<td, Error?>|Error = @java:Method {
-        'class: "io.ballerina.stdlib.ai.wso2.StreamGenerator"
-    } external;
+    remote function generateStream(Prompt prompt) returns stream<string, Error?>|Error {
+        return error Error("generateStream not implemented in HitlAuthFailureMockLLM");
+    }
 }
 
 @test:Config
@@ -961,10 +955,9 @@ public isolated client class HitlConditionalMockLLM {
         return error Error("chatStream not implemented in HitlConditionalMockLLM");
     }
 
-    remote function generateStream(Prompt prompt, @display {label: "Expected type"} typedesc<anydata> td = <>)
-        returns stream<td, Error?>|Error = @java:Method {
-        'class: "io.ballerina.stdlib.ai.wso2.StreamGenerator"
-    } external;
+    remote function generateStream(Prompt prompt) returns stream<string, Error?>|Error {
+        return error Error("generateStream not implemented in HitlConditionalMockLLM");
+    }
 }
 
 @test:Config

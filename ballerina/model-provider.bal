@@ -114,31 +114,9 @@ public type Prompt object {
     public (anydata|Document|Document[]|Chunk|Chunk[])[] insertions;
 };
 
-# Builds the stream returned by `ModelProvider.generateStream`.
-#
-# Acts as the (non-dependently-typed) body behind the dependently-typed `generateStream`
-# method: a native shim trampolines here so the gating and streaming logic can stay in
-# Ballerina. Only `string` is supported as the expected type; any other type yields an
-# error, because a partial generation is a valid value only for `string`. When the type
-# is valid, the underlying `chatStream` events are projected onto their text fragments.
-#
-# + model - The model provider whose `chatStream` supplies the raw events
-# + prompt - The prompt to send to the model
-# + td - The caller's expected type; must be `string`
-# + return - A stream of text fragments, or an error if the type is unsupported or the stream cannot be opened
-function generateLlmResponseStream(ModelProvider model, Prompt prompt, typedesc<anydata> td)
-        returns stream<string, Error?>|Error {
-    if td !is typedesc<string> {
-        return error Error("This data type is not supported for streaming. " +
-            "'generateStream' supports only 'string'; use 'generate' for structured types.");
-    }
-    stream<ChatCompletionChunk, Error?> chunks = check model->chatStream({role: USER, content: prompt});
-    return new stream<string, Error?>(new GenerateStreamTextIterator(chunks));
-}
-
 # Projects a raw `ChatCompletionChunk` stream onto its text content, yielding each
 # non-empty `content` fragment and skipping chunks that carry none - tool-call,
-# reasoning and finish-reason-only chunks. Backs `generateLlmResponseStream`.
+# reasoning and finish-reason-only chunks. Backs `generateStream`.
 class GenerateStreamTextIterator {
     private stream<ChatCompletionChunk, Error?> chunks;
 
@@ -195,18 +173,15 @@ public type ModelProvider distinct isolated client object {
     isolated remote function generate(Prompt prompt, @display {label: "Expected type"} typedesc<anydata> td = <>) returns td|Error;
 
     # Sends a streaming chat request to the model using the given prompt and streams
-    # back the generated answer.
+    # back the generated answer as text fragments.
     #
-    # Only `string` is supported as the expected type. A partial generation is a valid
-    # value only for `string`; structured types (records, ints, etc.) have no valid
-    # intermediate state and so cannot be streamed incrementally. Passing any other type
-    # returns an error - use `generate` for structured output.
+    # Streaming produces text only: structured types (records, ints, etc.) have no valid
+    # intermediate state and so cannot be streamed incrementally - use `generate` for
+    # structured output.
     #
     # + prompt - The prompt to use in the chat request
-    # + td - The expected type of the streamed value; must be `string`
-    # + return - A stream of the generated value, or an error if the type is unsupported or generation fails
-    remote function generateStream(Prompt prompt, @display {label: "Expected type"} typedesc<anydata> td = <>)
-        returns stream<td, Error?>|Error;
+    # + return - A stream of text fragments of the generated answer, or an error if generation fails
+    remote function generateStream(Prompt prompt) returns stream<string, Error?>|Error;
 };
 
 # Represents configuratations of WSO2 provider.
@@ -407,7 +382,44 @@ public isolated distinct client class Wso2ModelProvider {
             request.functions = tools;
             span.addTools(tools);
         }
+        return self.streamChatCompletion(request, span);
+    }
 
+    # Sends a streaming chat request to the model using the given prompt and streams
+    # back the generated answer as text fragments.
+    #
+    # + prompt - The prompt to use in the chat request
+    # + return - A stream of text fragments of the generated answer, or an error if generation fails
+    remote function generateStream(Prompt prompt) returns stream<string, Error?>|Error {
+        observe:GenerateContentSpan span = observe:createGenerateContentSpan("gpt-4o-mini");
+        span.addProvider("WSO2");
+        span.addTemperature(self.temperature);
+
+        DocumentContentPart[]|Error content = generateChatCreationContent(prompt);
+        if content is Error {
+            span.close(content);
+            return content;
+        }
+        intelligence:CreateChatCompletionRequest request = {
+            messages: [{role: USER, "content": content}],
+            temperature: self.temperature,
+            'stream: true
+        };
+        span.addInputMessages(request.messages.toJson());
+
+        stream<ChatCompletionChunk, Error?> chunks = check self.streamChatCompletion(request, span);
+        return new stream<string, Error?>(new GenerateStreamTextIterator(chunks));
+    }
+
+    # Posts a streaming `/chat/completions` request and exposes the SSE response as a stream of
+    # `ChatCompletionChunk`s. Shared by `chatStream` and `generateStream`. The span is closed when
+    # the stream ends, fails or is closed, or here if the connection cannot be opened.
+    #
+    # + request - The chat completion request; must have `stream: true` set
+    # + span - The span tracing this call
+    # + return - A stream of chat completion chunks, or an error if the connection fails
+    private function streamChatCompletion(intelligence:CreateChatCompletionRequest request, observe:LlmSpan span)
+            returns stream<ChatCompletionChunk, Error?>|Error {
         Wso2SseEventStream|error sseEvents = self.streamHttpClient->post("/chat/completions", request,
                 headers = {"x-product": "bi", "x-usage-context": "model_provider_chat"},
                 targetType = Wso2SseEventStream);
@@ -418,11 +430,6 @@ public isolated distinct client class Wso2ModelProvider {
         }
         return new stream<ChatCompletionChunk, Error?>(new Wso2ChatStreamIterator(sseEvents, span));
     }
-
-    remote function generateStream(Prompt prompt, @display {label: "Expected type"} typedesc<anydata> td = <>)
-            returns stream<td, Error?>|Error = @java:Method {
-        'class: "io.ballerina.stdlib.ai.wso2.StreamGenerator"
-    } external;
 
     private isolated function mapToChatCompletionRequestMessage(ChatMessage[]|ChatUserMessage messages)
     returns intelligence:ChatCompletionRequestMessage[] {
@@ -602,15 +609,15 @@ isolated function mapWso2FinishReason(string? reason) returns FinishReason? {
     }
 }
 
-# Iterates the raw SSE event stream backing `Wso2ModelProvider.chatStream`, converting each
-# event's `data` payload into a `ChatCompletionChunk` and closing the chat span once the
-# stream ends - on the `[DONE]` sentinel, on exhaustion, or on the first error.
+# Iterates the raw SSE event stream backing `Wso2ModelProvider.chatStream` and `generateStream`,
+# converting each event's `data` payload into a `ChatCompletionChunk` and closing the span once
+# the stream ends - on the `[DONE]` sentinel, on exhaustion, or on the first error.
 class Wso2ChatStreamIterator {
     private Wso2SseEventStream events;
-    private observe:ChatSpan span;
+    private observe:LlmSpan span;
     private boolean done = false;
 
-    function init(Wso2SseEventStream events, observe:ChatSpan span) {
+    function init(Wso2SseEventStream events, observe:LlmSpan span) {
         self.events = events;
         self.span = span;
     }
