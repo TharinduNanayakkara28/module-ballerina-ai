@@ -252,16 +252,14 @@ public type Scopes record {|
 # incremental update: a text fragment, a reasoning fragment, tool call fragments,
 # or a finish reason.
 public type ChatCompletionChunk record {|
+    #OpenAI's chatcmpl-abc123 or Anthropic's msg_01.... Every chunk from one generation carries the same value, so it names the response, not the individual chunk.
+    #Need to be discussed.
     # Unique identifier for the completion; stable across all chunks of one response
     string id?;
 
-#OpenAI's chatcmpl-abc123 or Anthropic's msg_01.... Every chunk from one generation carries the same value, so it names the response, not the individual chunk.
-#Need to be discussed.
-
+    # Need to be discussed.
     # Role of the author of the message; only sent on the first chunk
     ASSISTANT role?;
-
-# Need to be discussed.
 
     # The answer text fragment for this chunk; `()` for non-content chunks
     string? content = ();
@@ -271,8 +269,7 @@ public type ChatCompletionChunk record {|
     # Incremental tool calls produced by the model; correlate fragments by `index`
     ToolCallChunk[]? toolCalls = ();
 
-# Need to be discussed.
-
+    # Need to be discussed.
     # Reason the model stopped generating tokens; `()` until the final chunk
     FinishReason? finishReason = ();
 |};
